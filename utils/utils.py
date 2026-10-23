@@ -136,7 +136,7 @@ def labels_to_class_weights(labels, nc=80):
         return torch.Tensor()
 
     labels = np.concatenate(labels, 0)  # labels.shape = (866643, 5) for COCO
-    classes = labels[:, 0].astype(np.int)  # labels = [class xywh]
+    classes = labels[:, 0].astype(int)  # labels = [class xywh]
     weights = np.bincount(classes, minlength=nc)  # occurences per class
 
     # Prepend gridpoint count (for uCE trianing)
@@ -152,7 +152,7 @@ def labels_to_class_weights(labels, nc=80):
 def labels_to_image_weights(labels, nc=80, class_weights=np.ones(80)):
     # Produces image weights based on class mAPs
     n = len(labels)
-    class_counts = np.array([np.bincount(labels[i][:, 0].astype(np.int), minlength=nc) for i in range(n)])
+    class_counts = np.array([np.bincount(labels[i][:, 0].astype(int), minlength=nc) for i in range(n)])
     image_weights = (class_weights.reshape(1, nc) * class_counts).sum(1)
     # index = random.choices(range(n), weights=image_weights, k=1)  # weight image sample
     return image_weights
@@ -298,7 +298,7 @@ def compute_ap(recall, precision):
     method = 'interp'  # methods: 'continuous', 'interp'
     if method == 'interp':
         x = np.linspace(0, 1, 101)  # 101-point interp (COCO)
-        ap = np.trapz(np.interp(x, mrec, mpre), x)  # integrate
+        ap = np.trapezoid(np.interp(x, mrec, mpre), x)  # integrate
     else:  # 'continuous'
         i = np.where(mrec[1:] != mrec[:-1])[0]  # points where x axis (recall) changes
         ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])  # area under curve
@@ -439,15 +439,14 @@ class BCEBlurWithLogitsLoss(nn.Module):
 
 def compute_loss(p, targets, model):  # predictions, targets, model
     device = targets.device
-    ft = torch.cuda.FloatTensor if p[0].is_cuda else torch.Tensor
-    lcls, lbox, lobj = ft([0]).to(device), ft([0]).to(device), ft([0]).to(device)
+    lcls, lbox, lobj = (torch.zeros(1, device=device) for _ in range(3))
     tcls, tbox, indices, anchors = build_targets(p, targets, model)  # targets
     h = model.hyp  # hyperparameters
     red = 'mean'  # Loss reduction (sum or mean)
 
     # Define criteria
-    BCEcls = nn.BCEWithLogitsLoss(pos_weight=ft([h['cls_pw']]), reduction=red).to(device)
-    BCEobj = nn.BCEWithLogitsLoss(pos_weight=ft([h['obj_pw']]), reduction=red).to(device)
+    BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['cls_pw']], device=device), reduction=red)
+    BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([h['obj_pw']], device=device), reduction=red)
 
     # class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
     cp, cn = smooth_BCE(eps=0.0)
@@ -516,7 +515,7 @@ def build_targets(p, targets, model):
     tcls, tbox, indices, anch = [], [], [], []
     gain = torch.ones(6, device=targets.device)  # normalized to gridspace gain
     off = torch.tensor([[1, 0], [0, 1], [-1, 0], [0, -1]], device=targets.device).float()  # overlap offsets
-    at = torch.arange(na).view(na, 1).repeat(1, nt)  # anchor tensor, same as .repeat_interleave(nt)
+    at = torch.arange(na, device=targets.device).view(na, 1).repeat(1, nt)  # anchor indices
 
     g = 0.5  # offset
     style = 'rect4'
@@ -647,7 +646,7 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, merge=False, 
 
 def strip_optimizer(f='weights/best.pt'):  # from utils.utils import *; strip_optimizer()
     # Strip optimizer from *.pt files for lighter files (reduced by 1/2 size)
-    x = torch.load(f, map_location=torch.device('cpu'))
+    x = torch_utils.load_checkpoint(f, map_location=torch.device('cpu'))
     x['optimizer'] = None
     x['model'].half()  # to FP16
     torch.save(x, f)
@@ -656,7 +655,7 @@ def strip_optimizer(f='weights/best.pt'):  # from utils.utils import *; strip_op
 
 def create_pretrained(f='weights/best.pt', s='weights/pretrained.pt'):  # from utils.utils import *; create_pretrained()
     # create pretrained checkpoint 's' from 'f' (create_pretrained(x, x) for x in glob.glob('./*.pt'))
-    x = torch.load(f, map_location=torch.device('cpu'))
+    x = torch_utils.load_checkpoint(f, map_location=torch.device('cpu'))
     x['optimizer'] = None
     x['training_results'] = None
     x['epoch'] = -1

@@ -13,6 +13,7 @@ import torch
 from PIL import Image, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
+from utils import torch_utils
 
 from utils.utils import xyxy2xywh, xywh2xyxy, torch_distributed_zero_first
 
@@ -311,7 +312,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         n = len(self.img_files)
         assert n > 0, 'No images found in %s. See %s' % (path, help_url)
-        bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
+        bi = np.floor(np.arange(n) / batch_size).astype(int)  # batch index
         nb = bi[-1] + 1  # number of batches
 
         self.n = n  # number of images
@@ -332,7 +333,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         # Check cache
         cache_path = str(Path(self.label_files[0]).parent) + '.cache'  # cached labels
         if os.path.isfile(cache_path):
-            cache = torch.load(cache_path)  # load
+            cache = torch_utils.load_checkpoint(cache_path)  # load
             if cache['hash'] != get_hash(self.label_files + self.img_files):  # dataset changed
                 cache = self.cache_labels(cache_path)  # re-cache
         else:
@@ -365,7 +366,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                 elif mini > 1:
                     shapes[i] = [1, 1 / mini]
 
-            self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(np.int) * stride
+            self.batch_shapes = np.ceil(np.array(shapes) * img_size / stride + pad).astype(int) * stride
 
         # Cache labels
         create_datasubset, extract_bounding_boxes, labels_loaded = False, False, False
@@ -409,7 +410,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                         b = x[1:] * [w, h, w, h]  # box
                         b[2:] = b[2:].max()  # rectangle to square
                         b[2:] = b[2:] * 1.3 + 30  # pad
-                        b = xywh2xyxy(b.reshape(-1, 4)).ravel().astype(np.int)
+                        b = xywh2xyxy(b.reshape(-1, 4)).ravel().astype(int)
 
                         b[[0, 2]] = np.clip(b[[0, 2]], 0, w)  # clip boxes outside of image
                         b[[1, 3]] = np.clip(b[[1, 3]], 0, h)

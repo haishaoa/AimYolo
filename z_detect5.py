@@ -47,6 +47,7 @@ def pre_process(img0, img_sz, half, device):
     return img
 
 
+@torch.no_grad()
 def inference_img(img, model, augment, conf_thres, iou_thres, classes, agnostic):
     """
     推理，模型参数，...
@@ -54,7 +55,7 @@ def inference_img(img, model, augment, conf_thres, iou_thres, classes, agnostic)
     # inference
     pred = model(img, augment=augment)[0]
     # apply NMS
-    pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic)
+    pred = non_max_suppression(pred, conf_thres, iou_thres, classes=classes, agnostic=agnostic)
     return pred
 
 
@@ -78,8 +79,6 @@ def view_imgs(img0):
     """
     弹窗展示结果，press q to quit
     """
-    img0 = cv2.resize(img0, (480, 540))
-    # img0 = cv2.resize(img0, (960, 540))
     cv2.imshow('ws demo', img0)
     if (cv2.waitKey(1) & 0xFF) == ord('q'):
         cv2.destroyAllWindows()
@@ -124,10 +123,11 @@ class AimYolo:
         self.augment = opt.augment
 
         # self.bounding_box = {'left': 0, 'top': 0, 'width': 960, 'height': 960}
-        self.bounding_box = {'left': 0, 'top': 0, 'width': 1920, 'height': 1080}
+        self.bounding_box = {'left': 0, 'top': 0, 'width': win32api.GetSystemMetrics(0),
+                             'height': win32api.GetSystemMetrics(1)}
 
         # load model
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch_utils.select_device(opt.device)
         self.half = self.device.type != 'cpu'  # half precision only supported on CUDA
         self.model = attempt_load(self.weights, map_location=self.device)  # load FP32 model
         self.model = self.model.to(self.device)
@@ -136,13 +136,45 @@ class AimYolo:
             self.model.half()  # to FP16
 
         # name and color
-        self.names = self.model.modules.names if hasattr(self.model, 'module') else self.model.names
+        self.names = self.model.module.names if hasattr(self.model, 'module') else self.model.names
         self.colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(self.names))]
+
+    @torch.no_grad()
+    def check(self):
+        """Exercise preprocessing, inference and CUDA NMS without screen/mouse access."""
+        image = np.zeros((360, 640, 3), dtype=np.uint8)
+        image = pre_process(image, self.img_size, self.half, self.device)
+        prediction = inference_img(image, self.model, self.augment, self.conf_thres,
+                                   self.iou_thres, self.classes, self.agnostic_nms)
+        assert len(prediction) == 1
+        # A blank image may produce no candidates, so also exercise NMS explicitly.
+        boxes = torch.tensor([[0, 0, 10, 10], [1, 1, 9, 9]], device=self.device, dtype=torch.float32)
+        scores = torch.tensor([0.9, 0.8], device=self.device)
+        assert torchvision.ops.nms(boxes, scores, 0.5).numel() == 1
+        # Exercise a nonempty detection through the same mutation used by run().
+        # inference_img must return normal tensors that remain writable by callers.
+        sample = torch.tensor([[[320., 192., 64., 64., 0.9, 0.9]]], device=self.device)
+        sample_model = lambda batch, augment=False: (sample.clone(),)
+        det = inference_img(image, sample_model, False, 0.4, 0.5, None, False)[0]
+        assert det is not None and len(det) == 1
+        assert not torch.is_inference(det)
+        det[:, :4] = scale_coords(image.shape[2:], det[:, :4], (360, 640, 3)).round()
+        assert torch.isfinite(det).all()
+        if self.device.type == 'cuda':
+            torch.cuda.synchronize()
+        print(f'Runtime check passed: torch={torch.__version__}, device={self.device}, '
+              f'FP16={self.half}, input={tuple(image.shape)}')
 
     @torch.no_grad()
     def run(self):
 
         img_sz = self.img_size
+
+        if self.view_img:
+            cv2.namedWindow('ws demo', cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+            width = min(960, self.bounding_box['width'])
+            height = max(1, round(width * self.bounding_box['height'] / self.bounding_box['width']))
+            cv2.resizeWindow('ws demo', width, height)
 
         # warm up
         img = torch.zeros((1, 3, self.img_size, self.img_size), device=self.device)
@@ -222,6 +254,8 @@ def parseArgs():
     parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --class 0, or --class 0 2 3')
     parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
+    parser.add_argument('--device', default='', help='CUDA device, e.g. 0, or cpu (default: auto)')
+    parser.add_argument('--check', action='store_true', help='check inference and NMS without screen capture or mouse movement')
     opt = parser.parse_args()
     return opt
 
@@ -235,5 +269,8 @@ if __name__ == '__main__':
     aim_yolo = AimYolo(opt)
     print('The AimYolo Object Created.')
 
-    aim_yolo.run()
+    if opt.check:
+        aim_yolo.check()
+    else:
+        aim_yolo.run()
 

@@ -41,7 +41,7 @@ class Detect(nn.Module):
 
     @staticmethod
     def _make_grid(nx=20, ny=20):
-        yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
+        yv, xv = torch.meshgrid(torch.arange(ny), torch.arange(nx), indexing='ij')
         return torch.stack((xv, yv), 2).view((1, 1, ny, nx, 2)).float()
 
 
@@ -123,6 +123,7 @@ class Model(nn.Module):
             print('%.1fms total' % sum(dt))
         return x
 
+    @torch.no_grad()
     def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
         m = self.model[-1]  # Detect() module

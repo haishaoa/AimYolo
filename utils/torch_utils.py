@@ -10,6 +10,20 @@ import torch.nn.functional as F
 import torchvision.models as models
 
 
+def load_checkpoint(path, map_location=None):
+    """Load trusted legacy YOLOv5 weights/caches containing Python objects.
+
+    Only use files you trust: weights_only=False allows pickle code execution.
+    """
+    checkpoint = torch.load(path, map_location=map_location, weights_only=False)
+    model = checkpoint.get('model') if isinstance(checkpoint, dict) else checkpoint
+    if isinstance(model, nn.Module):
+        for module in model.modules():
+            if isinstance(module, nn.Upsample) and not hasattr(module, 'recompute_scale_factor'):
+                module.recompute_scale_factor = None
+    return checkpoint
+
+
 def init_seeds(seed=0):
     torch.manual_seed(seed)
 
@@ -143,7 +157,7 @@ def model_info(model, verbose=False):
 
 def load_classifier(name='resnet101', n=2):
     # Loads a pretrained model reshaped to n-class output
-    model = models.__dict__[name](pretrained=True)
+    model = models.__dict__[name](weights='DEFAULT')
 
     # Display model properties
     input_size = [3, 224, 224]
@@ -151,8 +165,9 @@ def load_classifier(name='resnet101', n=2):
     input_range = [0, 1]
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
-    for x in [input_size, input_space, input_range, mean, std]:
-        print(x + ' =', eval(x))
+    for name, value in [('input_size', input_size), ('input_space', input_space),
+                        ('input_range', input_range), ('mean', mean), ('std', std)]:
+        print(f'{name} = {value}')
 
     # Reshape output to n classes
     filters = model.fc.weight.shape[1]

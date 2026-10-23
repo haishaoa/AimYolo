@@ -1,0 +1,4 @@
+# Verified on RTX 5070 Ti, NVIDIA driver 617.42, Python 3.11.
+--index-url https://download.pytorch.org/whl/cu132
+torch==2.14.1+cu132
+torchvision==0.29.1+cu132

@@ -1,0 +1,4 @@
+-r requirements.txt
+onnx>=1.16,<2
+# CoreML is only needed for Apple deployment.
+coremltools>=8; sys_platform == 'darwin'

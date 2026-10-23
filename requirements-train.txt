@@ -1,0 +1,5 @@
+-r requirements.txt
+tensorboard>=2.18,<3
+pycocotools>=2.0.7,<3
+# Optional FLOPs profiling (same import name as legacy thop).
+ultralytics-thop>=2,<3
