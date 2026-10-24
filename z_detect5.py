@@ -10,11 +10,8 @@ import ctypes
 import signal
 
 import argparse
-import win32con
-import win32api
 
 from mss import mss
-from pynput import mouse
 
 from z_captureScreen import capScreen
 
@@ -22,10 +19,19 @@ from models.experimental import attempt_load
 from utils.datasets import letterbox
 from utils.utils import *
 
-from z_ctypes import SendInput, mouse_input
+if sys.platform == 'win32':
+    import win32con
+    import win32api
+    from z_ctypes import SendInput, mouse_input
 
-PROCESS_PER_MONITOR_DPI_AWARE = 2
-ctypes.windll.shcore.SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE)
+
+def screen_position(center, bounding_box, image_shape):
+    """Map capture pixels to desktop coordinates, including Retina scaling."""
+    height, width = image_shape[:2]
+    return (
+        round(bounding_box['left'] + center[0] * bounding_box['width'] / width),
+        round(bounding_box['top'] + center[1] * bounding_box['height'] / height),
+    )
 
 
 def pre_process(img0, img_sz, half, device):
@@ -92,7 +98,13 @@ def move_mouse(mouse_pynput, aim_persons_center):
     """
     if aim_persons_center:
         # 当前鼠标位置
-        current_x, current_y = mouse_pynput.position
+        if sys.platform == 'darwin':
+            # Quartz uses the same desktop coordinates as MSS monitor bounds.
+            # Avoid mixing AppKit points and Retina pixels in pynput's getter.
+            import Quartz
+            current_x, current_y = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+        else:
+            current_x, current_y = mouse_pynput.position
         # 距离当前位置最近的目标中心点and距离
         best_position = None
         for aim_person in aim_persons_center:
@@ -105,9 +117,12 @@ def move_mouse(mouse_pynput, aim_persons_center):
                 if dist < old_dist:
                     best_position = (aim_person, dist)
 
-        tx = int(best_position[0][0] / win32api.GetSystemMetrics(0) * 65535)
-        ty = int(best_position[0][1] / win32api.GetSystemMetrics(1) * 65535)
-        SendInput(mouse_input(win32con.MOUSEEVENTF_MOVE | win32con.MOUSEEVENTF_ABSOLUTE, tx, ty))
+        if sys.platform == 'win32':
+            tx = int(best_position[0][0] / win32api.GetSystemMetrics(0) * 65535)
+            ty = int(best_position[0][1] / win32api.GetSystemMetrics(1) * 65535)
+            SendInput(mouse_input(win32con.MOUSEEVENTF_MOVE | win32con.MOUSEEVENTF_ABSOLUTE, tx, ty))
+        else:
+            mouse_pynput.position = tuple(best_position[0])
 
 
 class AimYolo:
@@ -121,10 +136,7 @@ class AimYolo:
         self.classes = opt.classes
         self.agnostic_nms = opt.agnostic_nms
         self.augment = opt.augment
-
-        # self.bounding_box = {'left': 0, 'top': 0, 'width': 960, 'height': 960}
-        self.bounding_box = {'left': 0, 'top': 0, 'width': win32api.GetSystemMetrics(0),
-                             'height': win32api.GetSystemMetrics(1)}
+        self.no_mouse = opt.no_mouse
 
         # load model
         self.device = torch_utils.select_device(opt.device)
@@ -141,7 +153,7 @@ class AimYolo:
 
     @torch.no_grad()
     def check(self):
-        """Exercise preprocessing, inference and CUDA NMS without screen/mouse access."""
+        """Exercise preprocessing, inference and NMS without screen/mouse access."""
         image = np.zeros((360, 640, 3), dtype=np.uint8)
         image = pre_process(image, self.img_size, self.half, self.device)
         prediction = inference_img(image, self.model, self.augment, self.conf_thres,
@@ -167,6 +179,27 @@ class AimYolo:
 
     @torch.no_grad()
     def run(self):
+        if sys.platform == 'win32':
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        with mss() as sct:
+            if sys.platform == 'win32':
+                self.bounding_box = {'left': 0, 'top': 0, 'width': win32api.GetSystemMetrics(0),
+                                     'height': win32api.GetSystemMetrics(1)}
+            else:
+                # Prefer the display containing the desktop origin (primary display).
+                monitors = sct.monitors[1:]
+                if not monitors:
+                    raise RuntimeError('No screen available for capture.')
+                self.bounding_box = dict(next((monitor for monitor in monitors
+                                               if monitor['left'] == 0 and monitor['top'] == 0),
+                                              monitors[0]))
+            try:
+                self._run(sct)
+            finally:
+                if self.view_img:
+                    cv2.destroyAllWindows()
+
+    def _run(self, sct):
 
         img_sz = self.img_size
 
@@ -181,11 +214,13 @@ class AimYolo:
         _ = self.model(img.half() if self.half else img) if self.device.type != 'cpu' else None
 
         # mss and capture screen
-        sct = mss()
         print("The mss object created.")
         # mouse control
-        mouse_control = mouse.Controller()
-        print("The mouse controller created.")
+        mouse_control = None
+        if not self.no_mouse:
+            from pynput import mouse
+            mouse_control = mouse.Controller()
+            print("The mouse controller created.")
 
         # 若只在循环中的if前定义空列表，在检测不到目标时，for循环没有对其进行初始化，会报错
         aim_persons_center = []
@@ -226,14 +261,16 @@ class AimYolo:
                     center_x, center_y = calculate_position(xyxy)
                     aim_persons_center.append([center_x, center_y])
                     if int(cls) == 2 or int(cls) == 3:
-                        aim_persons_center_head.append([center_x, center_y])
+                        aim_persons_center_head.append(screen_position(
+                            (center_x, center_y), self.bounding_box, img0.shape))
 
             # Print time (inference + NMS)
             print('%sDone. (%.3fs)' % (s, t2 - t1))
 
             # 计算中心坐标，若有多个目标，只取其中一个
             # 取距离最近的一个
-            move_mouse(mouse_control, aim_persons_center_head)
+            if mouse_control is not None:
+                move_mouse(mouse_control, aim_persons_center_head)
             aim_persons_center = []
             aim_persons_center_head = []
 
@@ -256,6 +293,7 @@ def parseArgs():
     parser.add_argument('--augment', action='store_true', help='augmented inference')
     parser.add_argument('--device', default='', help='CUDA device, e.g. 0, or cpu (default: auto)')
     parser.add_argument('--check', action='store_true', help='check inference and NMS without screen capture or mouse movement')
+    parser.add_argument('--no-mouse', action='store_true', help='detect the screen without moving the mouse')
     opt = parser.parse_args()
     return opt
 

@@ -1,4 +1,5 @@
-# Python 3.11+. Install the GPU build first: pip install -r requirements-cuda.txt
+# Python 3.11+. macOS: pip install torch torchvision
+# Windows/NVIDIA: pip install -r requirements-cuda.txt
 # PyTorch is separate to preserve the working CUDA build.
 matplotlib>=3.8,<4
 numpy>=2.0,<3

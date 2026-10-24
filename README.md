@@ -15,7 +15,28 @@ https://wsblog.netlify.app/2023/01/30/2.aimyolo/
 ## 内容更新
 2023.4.8：更新了requirements.txt中的内容，将pynput前的注释符号删掉。
 
+## macOS 运行
 
+使用 Python 3.11 环境，在项目根目录执行：
+
+```bash
+conda activate AimYolo
+python -m pip install torch torchvision
+python -m pip install -r requirements.txt
+# 验证权重、CPU 推理和 NMS，不访问屏幕或鼠标：
+python z_detect5.py --check --device cpu
+# 先只检测屏幕并显示结果：
+python z_detect5.py --device cpu --view-img --no-mouse
+# 启用原有鼠标移动逻辑：
+python z_detect5.py --device cpu --view-img
+```
+
+macOS 不需要安装 `pywin32`，也不要使用 Windows/NVIDIA 的 `requirements-cuda.txt`。
+屏幕截图使用 MSS，鼠标移动使用 pynput，坐标会根据截图尺寸转换到桌面坐标。
+当前设备选择器支持 CPU 和 CUDA；Mac 请使用 `--device cpu`。
+首次截屏需在“系统设置 → 隐私与安全 → 屏幕与系统音频录制”（旧版为“屏幕录制”）中
+允许运行 Python 的应用（例如 VS Code 或终端）；鼠标控制还需要“辅助功能”权限。
+修改权限后，按系统提示重启对应应用。在预览窗口按 `q` 或在终端按 `Ctrl+C` 退出。
 
 ## RTX 5070 Ti / Windows 环境
 
